@@ -1,0 +1,429 @@
+\documentclass{article}
+\usepackage{hyperref}
+\hypersetup{
+ colorlinks, linkcolor=blue
+}
+\title{Lab 3: Paxos-based Key/Value Service}
+\author{COSI 147A -- Distributed Systems: Spring 2025 \\
+    Part A Due: Friday April 3, 11:55 PM \\
+    Part B Due: Tuesday April 23, 11:55 PM \\
+    }
+\date{}
+\usepackage{algorithm}
+\usepackage{algorithmicx}
+\usepackage[noend]{algpseudocode}
+\usepackage{courier}
+\newcommand{\code}{\texttt}
+\usepackage{listings}
+\lstset{
+  basicstyle=\fontsize{9}{9}\selectfont\ttfamily
+}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+Your Lab 2 depends on a single master view server to pick the primary.
+If the view server is not available (crashes or has network problems),
+then your key/value service won't work, even if both primary and backup
+are available. It also has the less critical defect that it copes with a
+server (primary or backup) that's briefly unavailable (e.g., due to a lost
+packet) by either blocking or declaring it dead; the latter is very
+expensive because it requires a complete key/value database transfer.
+In this lab you'll fix the above problems by using Paxos to manage the
+replication of a key/value store. You won't have anything corresponding
+to a master viewserver. Instead, a set of replicas will process all client
+requests in the same order, using Paxos to agree on the order. Paxos
+will get the agreement right even if some of the replicas are unavailable,
+or have unreliable network connections, or even if subsets of the
+replicas are isolated in their own network partitions. As long as Paxos
+can assemble a majority of replicas, it can process client operations.
+Replicas that were not in the majority can catch up later by asking
+Paxos for operations that they missed.
+
+Your system will consist of the following players: clients, \code{kvpaxos}
+servers, and \code{Paxos} peers. Clients send \code{Put()}, \code{PutHash()}, and \code{Get()}
+RPCs to key/value servers (called \code{kvpaxos} servers). A client can send
+an RPC to any of the \code{kvpaxos} servers, and should retry by sending to a
+different server if there's a failure. Each \code{kvpaxos} server contains a
+replica of the key/value database; handlers for client \code{Get()} and \code{Put()}
+RPCs; and a Paxos peer. Paxos takes the form of a library that is
+included in each \code{kvpaxos} server. A \code{kvpaxos} server talks to its local \code{Paxos} peer (via method calls). The different Paxos peers talk to each
+other via RPC to achieve agreement on each operation.
+
+Your Paxos library's interface supports an indefinite sequence of
+agreement ``instances.'' The instances are numbered with sequence
+numbers. Each instance is either ``decided'' or not yet decided. A
+decided instance has a value. If an instance is decided, then all the
+Paxos peers that are aware that it is decided will agree on the same
+value for that instance. The Paxos library interface allows \code{kvpaxos} to
+suggest a value for an instance, and to find out whether an instance has
+been decided and (if so) what that instance's value is.
+Your \code{kvpaxos} servers will use Paxos to agree on the order in which
+client \code{Put()}s and \code{Get()}s execute. Each time a \code{kvpaxos} server receives a
+\code{Put()} or \code{Get()} RPC, it will use Paxos to cause some Paxos instance's
+value to be a description of that \code{Put()} or \code{Get()}. That instance's sequence
+number determines when the \code{Put()} or \code{Get()} executes relative to other
+\code{Put()}s and \code{Get()}s. In order to find the value to be returned by a \code{Get()},
+\code{kvpaxos} should first apply all \code{Put()}s that are ordered before the \code{Get()} to
+its key/value database.
+
+You should think of \code{kvpaxos} as using Paxos to implement a ``log'' of
+\code{Put/Get} operations. That is, each Paxos instance is a log element, and
+the order of operations in the log is the order in which all \code{kvpaxos}
+servers will apply the operations to their key/value databases. Paxos
+will ensure that the \code{kvpaxos} servers agree on this order.
+Only RPC may be used for interaction between clients and servers,
+between different servers, and between different clients. For example,
+different instances of your server are not allowed to share Go variables
+or files.
+
+Your key/value service (\code{kvpaxos}) will support three RPCs: \code{Put(key, value)}, \code{PutHash(key, value)}, and \code{Get(key)}. The service will maintain a
+simple database of key/value pairs. \code{Put()} will update the value for a
+particular key in the database. \code{PutHash} will chain all values for a key
+together, which is useful for testing purposes; \code{PutHash} will store the
+hash(old value of the key in database, new supplied value) into
+database, and return the old value. \code{Get()} will fetch the current value for
+a key.
+
+Your Paxos-based key/value storage system will have some limitations
+that would need to be fixed in order for it to be a serious system. It won't
+cope with crashes, since it stores neither the key/value database nor
+the Paxos state on disk. It requires the set of servers to be fixed, so one
+cannot replace old servers. Finally, it is slow: many Paxos messages
+are exchanged for each \code{Put()} and \code{Get()}. All of these problems can be
+fixed.
+
+You should consult the Paxos lecture notes and the Paxos assigned
+reading. For a wider perspective, have a look at the Zookeeper paper.
+
+\section{Collaboration Policy}
+You must write all the code you hand in, except for code that we give you as part of the assignment. You are not allowed to look at anyone else's solution, and you are not allowed to look at code from previous years. You may discuss the assignments with other students, but you may not look at or copy each others' code. Please \textbf{do not publish your code or make it available to other students} -- for example, please do not make your code visible on Github or you will not receive credit for the assignment.
+
+\section{Software}
+We supply you with new skeleton code and new tests in \code{lab3/paxos} and
+\code{lab3/kvpaxos}. You'll find the initial lab software on Latte. You can use the
+department's public workstations to run your code. If you want to run
+your code on your machine and you encounter problems, please
+contact the TAs.
+
+\section{Part A: Paxos}
+First you'll implement a Paxos library. \code{paxos.go} contains descriptions of
+the methods you must implement. When you're done, you should pass
+all the tests in \code{paxos} directory:
+
+\begin{lstlisting}
+$ cd $lab3/paxos
+$ go test
+Test: Single proposer ...
+... Passed
+Test: Many proposers, same value ...
+... Passed
+Test: Many proposers, different values ...
+... Passed
+Test: Out-of-order instances ...
+... Passed
+Test: Deaf proposer ...
+... Passed
+Test: Forgetting ...
+... Passed
+Test: Lots of forgetting ...
+... Passed
+Test: Paxos frees forgotten instance memory ...
+... Passed
+Test: Many instances ...
+... Passed
+Test: Minority proposal ignored ...
+... Passed
+Test: Many instances, unreliable RPC ...
+... Passed
+Test: No decision if partitioned ...
+... Passed
+Test: Decision in majority partition ...
+... Passed
+Test: All agree after full heal ...
+... Passed
+Test: One peer switches partitions ...
+... Passed
+Test: One peer switches partitions, unreliable ...
+... Passed
+Test: Many requests, changing partitions ...
+... Passed
+PASS
+ok paxos 59.523s
+$
+\end{lstlisting}
+
+Your implementation must support this interface:
+
+\newpage
+\begin{lstlisting}
+
+px = paxos.Make(peers []string, me int)
+px.Start(seq int, v interface{}) // start agreement on new instance
+px.Status(seq int) (decided bool, v interface{}) // get info about an instance
+px.Done(seq int) // ok to forget all instances <= seq
+px.Max() int // highest instance seq known, or -1
+px.Min() int // instances before this have been forgotten
+\end{lstlisting}
+
+An application calls \code{Make(peers, me)} to create a \code{Paxos} peer. The \code{peers}
+argument contains the ports of all the peers (including this one), and the
+\code{me} argument is the index of this peer in the \code{peers} array. \code{Start(seq,v)}
+asks Paxos to start agreement on instance \code{seq}, with proposed value \code{v};
+\code{Start()} should return immediately, without waiting for agreement to
+complete. The application calls \code{Status(seq)} to find out whether the
+\code{Paxos} peer thinks the instance has reached agreement, and if so what
+the agreed value is. \code{Status()} should consult the local Paxos peer's state
+and return immediately; it should not communicate with other peers.
+The application may call \code{Status()} for old instances (but see the
+discussion of \code{Done()} below).
+
+Your implementation should be able to make progress on agreement for
+multiple instances at the same time. That is, if application peers call
+\code{Start()} with different sequence numbers at about the same time, your
+implementation should run the Paxos protocol concurrently for all of
+them. You should not wait for agreement to complete for instance $i$
+before starting the protocol for instance $i+1$. Each instance should have
+its own separate execution of the Paxos protocol.
+
+A long-running Paxos-based server must forget about instances that are
+no longer needed and free the memory storing information about those
+instances. An instance is needed if the application still wants to be able
+to call \code{Status()} for that instance, or if another \code{Paxos} peer may not yet
+have reached agreement on that instance. Your Paxos should
+implement freeing of instances in the following way. When a particular
+peer application will no longer need to call \code{Status()} for any instance $\le
+x$, it should call \code{Done(x)}. That \code{Paxos} peer can't yet discard the
+instances, since some other \code{Paxos} peer might not yet have agreed to
+the instance. So each \code{Paxos} peer should tell each other peer the
+highest \code{Done} argument supplied by its local application. Each \code{Paxos}
+peer will then have a \code{Done} value from each other peer. It should find the
+minimum, and discard all instances with sequence numbers $\le$ that
+minimum. The \code{Min()} method returns this minimum sequence number
+plus one.
+
+It's OK for your \code{Paxos} to piggyback the \code{Done} value in the agreement
+protocol packets; that is, it's OK for peer \code{P1} to only learn \code{P2}'s latest
+\code{Done} value the next time that \code{P2} sends an agreement message to \code{P1}.
+If \code{Start()} is called with a sequence number less than \code{Min()}, the \code{Start()}
+call should be ignored. If \code{Status()} is called with a sequence number less
+than \code{Min()}, \code{Status()} should return false (indicating no agreement).
+Here is the Paxos pseudocode (for a single instance) from the lecture:
+
+\newpage
+
+\begin{lstlisting}
+proposer(v):
+    while not decided:
+        choose n, unique and higher than any n seen so far
+        send prepare(n) to all servers including self
+        if prepare_ok(n_a, v_a) from majority:
+            v' = v_a with highest n_a; choose own v otherwise
+            send accept(n, v') to all
+            if accept_ok(n) from majority:
+                send decided(v') to all
+
+acceptor's state:
+    n_p (highest prepare seen)
+    n_a, v_a (highest accept seen)
+
+acceptor's prepare(n) handler:
+    if n > n_p
+        n_p = n
+        reply prepare_ok(n_a, v_a)
+    else
+        reply prepare_reject
+
+acceptor's accept(n, v) handler:
+    if n >= n_p
+        n_p = n
+        n_a = n
+        v_a = v
+        reply accept_ok(n)
+    else
+        reply accept_reject
+\end{lstlisting}
+
+
+
+\subsection{Hints}
+Here's a reasonable plan of attack:
+\begin{enumerate}
+    \item Add elements to the \code{Paxos} struct in \code{paxos.go} to hold the state you'll
+    need, according to the lecture pseudocode. You'll need to define a
+    struct to hold information about each agreement instance.
+
+    \item Define RPC argument/reply type(s) for Paxos protocol messages,
+    based on the lecture pseudocode. The RPCs must include the
+    sequence number for the agreement instance to which they refer.
+    Remember the field names in the RPC structures must start with
+    capital letters.
+
+    \item Write a proposer function that drives the Paxos protocol for an
+    instance, and RPC handlers that implement acceptors. Start a
+    proposer function in its own thread for each instance, as needed
+    (e.g., in \code{Start()}).
+    
+    \item At this point you should be able to pass the first few tests.
+
+    \item Now implement forgetting.
+
+    \item More than one Paxos instance may be executing at a given time,
+and they may be \code{Start()}ed and/or decided out of order. (E.g., \code{seq} 10 may
+be decided before \code{seq} 5).
+
+    \item Remember that multiple application peers may call \code{Start()} on the
+same instance, perhaps with different proposed values. An application
+may even call \code{Start()} for an instance that has already been decided.
+
+    \item Think about how your paxos will forget (discard) information about
+old instances before you start writing code. Each Paxos peer will need
+to store instance information in some data structure that allows
+individual instance records to be deleted (so that the Go garbage
+collector can free/reuse the memory).
+
+    \item You do not need to write code to handle the situation where a
+Paxos peer needs to restart after a crash. If one of your Paxos peers
+crashes, it will never be restarted.
+
+    \item Have each Paxos peer start a thread per undecided instance
+whose job is to eventually drive the instance to agreement, by acting as
+a proposer.
+
+    \item A single Paxos peer may be acting simultaneously as acceptor and
+proposer for the same instance. Keep these two activities as separate
+as possible.
+
+    \item A proposer needs a way to choose a higher proposal number than
+any seen so far. This is a reasonable exception to the rule that proposer
+and acceptor should be separate. It may also be useful for the propose
+RPC handler to return the highest known proposal number if it rejects
+an RPC, to help the caller pick a higher one next time. The \code{px.me} value
+will be different in each Paxos peer, so you can use \code{px.me} to help
+ensure that proposal numbers are unique.
+
+    \item Figure out the minimum number of messages Paxos should use
+when reaching agreement in non-failure cases and make your
+implementation use that minimum.
+    
+    \item The tester calls \code{Kill()} when it wants your Paxos to shut down; \code{Kill()}
+sets \code{px.dead}. You should check \code{px.dead} in any loops you have that
+might run for a while, and break out of the loop if \code{px.dead} is true. It's
+particularly important to do this any in any long-running threads you
+create.
+\end{enumerate}
+
+\section{Part B: Paxos-Based Key/Value Service}
+Now you'll build \code{kvpaxos}, a fault-tolerant key/value storage system.
+You'll modify \code{kvpaxos/client.go}, \code{kvpaxos/common.go}, and
+\code{kvpaxos/server.go}.
+Your \code{kvpaxos} replicas should stay identical; the only exception is that
+some replicas may lag others if they are not reachable. If a replica isn't
+reachable for a while, but then starts being reachable, it should
+eventually catch up (learn about operations that it missed).
+Your \code{kvpaxos} client code should try different replicas it knows about
+until one responds. A \code{kvpaxos} replica that is part of a majority of
+replicas that can all reach each other should be able to serve client
+requests.
+
+Your storage system must provide sequential consistency to
+applications that use its client interface. That is, completed application
+calls to the \code{Clerk.Get()}, \code{Clerk.Put()}, and \code{Clerk.PutHash()} methods in
+\code{kvpaxos/client.go} must appear to have affected all replicas in the same
+order and have at-most-once semantics. A \code{Clerk.Get()} should see the value written by the
+most recent \code{Clerk.Put()} (in that order) to the same
+key. One consequence of this is that you must ensure that each
+application call to \code{Clerk.Put()} must appear in that order just once (i.e.,
+write the key/value database just once), even though internally your
+\code{client.go} may have to send \code{Put()} and \code{PutHash()} RPCs multiple times
+until it finds a \code{kvpaxos} server replica that replies.
+
+\subsection{Hints}
+Here's a reasonable plan:
+\begin{enumerate}
+
+    \item Fill in the \code{Op} struct in server.go with the ``value'' information that
+\code{kvpaxos} will use Paxos to agree on, for each client request. \code{Op}
+field names must start with capital letters. You should use \code{Op}
+structs as the agreed-on values -- for example, you should pass
+\code{Op} structs to Paxos \code{Start()}. Go's RPC can marshall/unmarshall \code{Op}
+structs; the call to \code{gob.Register()} in \code{StartServer()} teaches it how.
+
+    \item Implement the \code{Put()} handler in \code{server.go}. It should enter a \code{Put Op} in
+the Paxos log (i.e., use Paxos to allocate a Paxos instance, whose
+value includes the key and value (so that other \code{kvpaxoses} know
+about the \code{Put()})).
+
+    \item Implement a \code{Get()} handler. It should enter a \code{Get Op} in the Paxos log,
+and then ``interpret'' the the log before that point to make sure its
+key/value database reflects all recent \code{Put()}s.
+
+    \item Add code to cope with duplicate client \code{Put()}s -- i.e., situations in which
+\code{Put()} in \code{client.go} sends the same request to multiple \code{kvpaxos}
+replicas. The \code{Put()/PutHash()} should execute just once.
+
+    \item Your server should try to assign the next available Paxos instance
+(sequence number) to each incoming client RPC. However, some other
+\code{kvpaxos} replica may also be trying to use that instance for a different
+client's operation. So the \code{kvpaxos} server has to be prepared to try
+different instances.
+
+    \item Your kvpaxos servers should not directly communicate; they
+should only interact with each other through the Paxos log.
+
+    \item As in Lab 2, you will need to uniquely identify client operations to
+ensure that they execute just once. Also as in Lab 2, you can assume
+that each clerk has only one outstanding \code{Put} or \code{Get}.
+
+    \item A \code{kvpaxos} server should not complete a \code{Get()} RPC if it is not part
+of a majority (so that it does not serve stale data). This means that each
+\code{Get()} (as well as each \code{Put()}) must involve Paxos agreement.
+
+    \item Don't forget to call the Paxos \code{Done()} method when a kvpaxos has
+processed an instance and will no longer need it or any previous instance.
+
+\end{enumerate}
+
+Your code will need to wait for Paxos instances to complete
+agreement. The only way to do this is to periodically call \code{Status()},
+sleeping between calls. How long to sleep? A good plan is to check
+quickly at first, and then more slowly:
+
+\begin{lstlisting}[language=go]
+to := 10 * time.Millisecond
+for {
+    decided, _ := kv.px.Status(seq)
+    if decided {
+        ...
+        return
+    }
+    time.Sleep(to)
+    if to < 10 * time.Second {
+        to *= 2
+    }
+}
+\end{lstlisting}
+
+If one of your kvpaxos servers falls behind (i.e., did not participate
+in the agreement for some instance), it will later need to find out what (if
+anything) was agree to. A reasonable way to to this is to call \code{Start()},
+which will either discover the previously agreed-to value, or cause
+agreement to happen. Think about what value would be reasonable to
+pass to \code{Start()} in this situation.
+
+
+\section{Handin Procedure}
+Upload your code to Latte as a gzipped \code{tar} file by the deadlines at the top of the page. To do this, execute these commands: 
+\begin{lstlisting}
+$ cd ~/lab3 
+$ tar czvf lab3a-handin.tar.gz . 
+\end{lstlisting}
+That should produce a file called \code{lab3a-handin.tar.gz}. And for Part B: 
+\begin{lstlisting}
+$ cd ~/lab3 
+$ tar czvf lab3b-handin.tar.gz . 
+\end{lstlisting}
+You will receive full credit if your software passes the \code{test\_test.go} tests and does not violate any of the conditions stated above. \textbf{We will again run the tests over your code a minimum of twenty times}. There is no partial credit for tests: If a test case fails only once out of twenty times, it is still considered to have been failed. 
+\end{document}
