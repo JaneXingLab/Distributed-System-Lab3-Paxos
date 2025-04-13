@@ -1,21 +1,24 @@
 package kvpaxos
 
-import "net/rpc"
+import (
+	"net/rpc"
+	"time"
+)
 
 type Clerk struct {
-  servers []string
-  // You will have to modify this struct.
+	servers  []string
+	clientID int64
+	// You will have to modify this struct.
 }
-
 
 func MakeClerk(servers []string) *Clerk {
-  ck := new(Clerk)
-  ck.servers = servers
-  // You'll have to add code here.
-  return ck
+	ck := new(Clerk)
+	ck.servers = servers
+	ck.clientID = time.Now().UnixNano()
+	// You'll have to add code here.
+	return ck
 }
 
-//
 // call() sends an RPC to the rpcname handler on server srv
 // with arguments args, waits for the reply, and leaves the
 // reply in reply. the reply argument should be a pointer
@@ -30,43 +33,38 @@ func MakeClerk(servers []string) *Clerk {
 //
 // please use call() to send all RPCs, in client.go and server.go.
 // please don't change this function.
-//
 func call(srv string, rpcname string,
-          args interface{}, reply interface{}) bool {
-  c, errx := rpc.Dial("unix", srv)
-  if errx != nil {
-    return false
-  }
-  defer c.Close()
-    
-  err := c.Call(rpcname, args, reply)
-  //fmt.Println(err)
-  return err == nil
+	args interface{}, reply interface{}) bool {
+	c, errx := rpc.Dial("unix", srv)
+	if errx != nil {
+		return false
+	}
+	defer c.Close()
+
+	err := c.Call(rpcname, args, reply)
+	//fmt.Println(err)
+	return err == nil
 }
 
-//
 // fetch the current value for a key.
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
-//
 func (ck *Clerk) Get(key string) string {
-  // You will have to modify this function.
-  return ""
+	// You will have to modify this function.
+	return ""
 }
 
-//
 // set the value for a key.
 // keeps trying until it succeeds.
-//
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
-  // You will have to modify this function.
-  return ""
+	// You will have to modify this function.
+	return ""
 }
 
 func (ck *Clerk) Put(key string, value string) {
-  ck.PutExt(key, value, false)
+	ck.PutExt(key, value, false)
 }
 func (ck *Clerk) PutHash(key string, value string) string {
-  v := ck.PutExt(key, value, true)
-  return v
+	v := ck.PutExt(key, value, true)
+	return v
 }
