@@ -68,16 +68,12 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 	to := 10 * time.Millisecond
 	for {
 		op := Op{Optype: "Get", Key: args.Key, ClientID: args.ClientID, RequestID: args.RequestID}
-		seq := kv.nextSeq
-		fmt.Printf("Client: %d Get(%d): %s %s, Seq: %d\n", args.ClientID, kv.me, args.Key, kv.kvdatabase[args.Key], seq)
-
-		kv.mu.Lock()
 		for {
-			if seq < kv.nextSeq {
-				break
-			}
+			seq := kv.nextSeq
+			fmt.Printf("Client: %d Get(%d): %s %s, Seq: %d\n", args.ClientID, kv.me, args.Key, kv.kvdatabase[args.Key], seq)
 			decided, _ := kv.px.Status(seq)
 			if decided {
+				kv.mu.Lock()
 				_, dOp := kv.px.Status(seq)
 				op, ok := dOp.(Op)
 				fmt.Printf("Decided: %t Value: %s Seq: %d, Op: %+v\n", decided, kv.kvdatabase[op.Key], seq, op)
@@ -88,6 +84,7 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 						if missingOptype != "Get" {
 							fmt.Printf("Paxos: %d Missing %+v\n", kv.me, op)
 							if op.Optype == "PutHash" {
+
 								fmt.Printf("Previous value: %s, new value: %s, Seq:%d \n", previousValue, op.Value, seq)
 								kv.kvdatabase[op.Key] = previousValue + op.Value
 							} else {
@@ -97,6 +94,7 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 							previousValue = kv.kvdatabase[op.Key]
 						}
 						kv.nextSeq++
+						kv.mu.Unlock()
 						break
 					} else {
 						fmt.Printf("Paxos: %d Matching Seq: %d, GetValue: %s Op: %+v\n", kv.me, seq, kv.kvdatabase[op.Key], op)
@@ -119,7 +117,6 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 				}
 			}
 		}
-		kv.mu.Unlock()
 	}
 }
 
@@ -136,14 +133,14 @@ func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 	for {
 		op := Op{Optype: opType, Key: args.Key, Value: args.Value, ClientID: args.ClientID, RequestID: args.RequestID}
 		seq := kv.nextSeq
-		fmt.Printf("Put(%d): %s %s, Seq: %d\n", kv.me, args.Key, args.Value, seq)
-		kv.mu.Lock()
+		fmt.Printf("Client: %d Put(%d): %s : %s, Seq: %d\n", args.ClientID, kv.me, args.Key, args.Value, seq)
 		for {
 			if seq < kv.nextSeq {
 				break
 			}
 			decided, _ := kv.px.Status(seq)
 			if decided {
+				kv.mu.Lock()
 				_, dOp := kv.px.Status(seq)
 				op, ok := dOp.(Op)
 				fmt.Printf("Decided: %t Seq: %d, Op: %+v\n", decided, seq, op)
@@ -163,6 +160,7 @@ func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 							reply.PreviousValue = kv.kvdatabase[op.Key]
 						}
 						kv.nextSeq++
+						kv.mu.Unlock()
 						break
 					} else {
 						reply.Err = OK
@@ -179,6 +177,7 @@ func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 				} else {
 					fmt.Println("type assertion failed")
 				}
+				kv.mu.Unlock()
 			} else {
 				fmt.Printf("Paxos: %d start Seq: %d\n", kv.me, seq)
 				kv.px.Start(seq, op)
@@ -188,7 +187,6 @@ func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 				}
 			}
 		}
-		kv.mu.Unlock()
 	}
 }
 

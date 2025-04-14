@@ -65,12 +65,13 @@ func (ck *Clerk) Get(key string) string {
 	var reply GetReply
 	for _, server := range ck.servers {
 		go call(server, "KVPaxos.Get", &args, &reply)
+		time.Sleep(50 * time.Millisecond)
 	}
 	for {
 		if reply.Err == "OK" {
 			return reply.Value
 		}
-		time.Sleep(50 * time.Millisecond) // short sleep before retryin
+		time.Sleep(10 * time.Millisecond) // short sleep before retryin
 	}
 }
 
@@ -88,12 +89,13 @@ func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
 	var reply PutReply
 	for _, server := range ck.servers {
 		go call(server, "KVPaxos.Put", &args, &reply)
+		time.Sleep(50 * time.Millisecond)
 	}
 	for {
 		if reply.Err == "OK" {
 			return reply.PreviousValue
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
