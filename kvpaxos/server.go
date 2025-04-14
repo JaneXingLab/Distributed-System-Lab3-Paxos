@@ -70,7 +70,7 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 		op := Op{Optype: "Get", Key: args.Key, ClientID: args.ClientID, RequestID: args.RequestID}
 		seq := kv.nextSeq
 		fmt.Printf("Client: %d Get(%d): %s %s, Seq: %d\n", args.ClientID, kv.me, args.Key, kv.kvdatabase[args.Key], seq)
-		kv.px.Start(seq, op)
+
 		kv.mu.Lock()
 		for {
 			if seq < kv.nextSeq {
@@ -111,8 +111,10 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 				}
 				kv.mu.Unlock()
 			} else {
+				fmt.Printf("Paxos: %d start Seq: %d\n", kv.me, seq)
+				kv.px.Start(seq, op)
 				time.Sleep(to)
-				if to < 10*time.Second {
+				if to < 100*time.Millisecond {
 					to *= 2
 				}
 			}
@@ -122,8 +124,9 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 }
 
 func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
-	to := 10 * time.Millisecond
 	reply.PreviousValue = kv.kvdatabase[args.Key]
+	to := 10 * time.Millisecond
+
 	var opType string
 	if args.DoHash {
 		opType = "PutHash"
@@ -134,7 +137,6 @@ func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 		op := Op{Optype: opType, Key: args.Key, Value: args.Value, ClientID: args.ClientID, RequestID: args.RequestID}
 		seq := kv.nextSeq
 		fmt.Printf("Put(%d): %s %s, Seq: %d\n", kv.me, args.Key, args.Value, seq)
-		kv.px.Start(seq, op)
 		kv.mu.Lock()
 		for {
 			if seq < kv.nextSeq {
@@ -178,8 +180,10 @@ func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 					fmt.Println("type assertion failed")
 				}
 			} else {
+				fmt.Printf("Paxos: %d start Seq: %d\n", kv.me, seq)
+				kv.px.Start(seq, op)
 				time.Sleep(to)
-				if to < 10*time.Second {
+				if to < 100*time.Millisecond {
 					to *= 2
 				}
 			}
