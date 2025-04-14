@@ -1,20 +1,26 @@
 package kvpaxos
 
 import (
+	"fmt"
 	"net/rpc"
 	"time"
 )
 
+var clientID int = 0
+
 type Clerk struct {
-	servers  []string
-	clientID int64
+	servers      []string
+	clientID     int
+	nextRequstID int
 	// You will have to modify this struct.
 }
 
 func MakeClerk(servers []string) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.clientID = time.Now().UnixNano()
+	ck.clientID = clientID
+	clientID++
+	ck.nextRequstID = 0
 	// You'll have to add code here.
 	return ck
 }
@@ -51,14 +57,44 @@ func call(srv string, rpcname string,
 // keeps trying forever in the face of all other errors.
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	return ""
+	fmt.Printf("Get, client: %d, requestID: %d, key: %s\n", ck.clientID, ck.nextRequstID, key)
+	args := GetArgs{}
+	args.Key = key
+	args.ClientID = ck.clientID
+	args.RequestID = ck.nextRequstID
+	var reply GetReply
+	for _, server := range ck.servers {
+		go call(server, "KVPaxos.Get", &args, &reply)
+	}
+	for {
+		if reply.Err == "OK" {
+			return reply.Value
+		}
+		time.Sleep(50 * time.Millisecond) // short sleep before retryin
+	}
 }
 
 // set the value for a key.
 // keeps trying until it succeeds.
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
 	// You will have to modify this function.
-	return ""
+	fmt.Printf("Put, client: %d, requestID: %d, key: %s, value: %s\n", ck.clientID, ck.nextRequstID, key, value)
+	args := PutArgs{}
+	args.Key = key
+	args.Value = value
+	args.DoHash = dohash
+	args.ClientID = ck.clientID
+	args.RequestID = ck.nextRequstID
+	var reply PutReply
+	for _, server := range ck.servers {
+		go call(server, "KVPaxos.Put", &args, &reply)
+	}
+	for {
+		if reply.Err == "OK" {
+			return reply.PreviousValue
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
