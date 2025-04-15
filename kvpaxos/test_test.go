@@ -10,7 +10,7 @@ import "math/rand"
 
 func check(t *testing.T, ck *Clerk, key string, value string) {
 	v := ck.Get(key)
-	fmt.Printf("v: %s\n", v)
+	fmt.Printf("ck: %v, v: %s\n", ck, v)
 	if v != value {
 		t.Fatalf("Get(%v) -> %v, expected %v", key, v, value)
 	}
@@ -384,28 +384,31 @@ func TestUnreliable(t *testing.T) {
 				key := strconv.Itoa(me)
 				pv := myck.Get(key)
 				ov := myck.PutHash(key, "0")
-				fmt.Printf("pv %s : ov %s\n", pv, ov)
 				if ov != pv {
+					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value; expected %s but got %s", pv, ov)
 				}
+				fmt.Printf("put hash: key %s, value 1", key)
 				ov = myck.PutHash(key, "1")
 				pv = NextValue(pv, "0")
-				fmt.Printf("pv %s : ov %s\n", pv, ov)
 				if ov != pv {
+					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value; expected %s but got %s", pv, ov)
 				}
 				ov = myck.PutHash(key, "2")
 				pv = NextValue(pv, "1")
-				fmt.Printf("pv %s : ov %s\n", pv, ov)
 				if ov != pv {
+					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value; expected %s", pv)
 				}
 				nv := NextValue(pv, "2")
 				time.Sleep(100 * time.Millisecond)
 				if myck.Get(key) != nv {
+					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value")
 				}
 				if myck.Get(key) != nv {
+					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value")
 				}
 				ok = true

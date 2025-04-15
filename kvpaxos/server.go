@@ -13,6 +13,7 @@ import "os"
 import "syscall"
 import "encoding/gob"
 import "math/rand"
+import "strconv"
 
 const Debug = 0
 
@@ -21,6 +22,11 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 		log.Printf(format, a...)
 	}
 	return
+}
+
+type Entry struct {
+	LastRequstID   int
+	LastReplyValue string
 }
 
 type Op struct {
@@ -43,7 +49,7 @@ type KVPaxos struct {
 	px         *paxos.Paxos
 	kvdatabase map[string]string
 	nextSeq    int
-	done       map[int64]int
+	done       map[int]Entry
 
 	// Your definitions here.
 }
@@ -54,139 +60,154 @@ func makeKVPaxos(me int) *KVPaxos {
 	kv.kvdatabase = make(map[string]string)
 	// Your initialization code here.
 	kv.nextSeq = 0
-	kv.done = make(map[int64]int)
+	kv.done = make(map[int]Entry)
 	return kv
 }
 
-func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
-	// Your code here.
-	//done, exists := kv.done[args.ClientID]
-	//if exists && done >= args.RequestID {
-	//
-	//}
-	previousValue := kv.kvdatabase[args.Key]
-	to := 10 * time.Millisecond
-	for {
-		op := Op{Optype: "Get", Key: args.Key, ClientID: args.ClientID, RequestID: args.RequestID}
-		for {
-			seq := kv.nextSeq
-			fmt.Printf("Client: %d Get(%d): %s %s, Seq: %d\n", args.ClientID, kv.me, args.Key, kv.kvdatabase[args.Key], seq)
-			decided, _ := kv.px.Status(seq)
-			if decided {
-				kv.mu.Lock()
-				_, dOp := kv.px.Status(seq)
-				op, ok := dOp.(Op)
-				fmt.Printf("Decided: %t Value: %s Seq: %d, Op: %+v\n", decided, kv.kvdatabase[op.Key], seq, op)
-				if ok {
-					if op.RequestID != args.RequestID || op.ClientID != args.ClientID {
-						fmt.Printf("Paxos: %d Not matching Seq: %d \n", kv.me, seq)
-						missingOptype := op.Optype
-						if missingOptype != "Get" {
-							fmt.Printf("Paxos: %d Missing %+v\n", kv.me, op)
-							if op.Optype == "PutHash" {
+func (kv *KVPaxos) isDuplicate(clientID int, requestID int) (bool, string) {
+	lastRequst, ok := kv.done[clientID]
+	fmt.Printf("ok: %t, ClientID: %d, LastRequstID: %d, This requstID: %d\n", ok, clientID, lastRequst.LastRequstID, requestID)
+	return ok && lastRequst.LastRequstID >= requestID, kv.done[clientID].LastReplyValue
+}
 
-								fmt.Printf("Previous value: %s, new value: %s, Seq:%d \n", previousValue, op.Value, seq)
-								kv.kvdatabase[op.Key] = previousValue + op.Value
-							} else {
-								fmt.Printf("Previous value: %s, new value: %s, Seq:%d \n", previousValue, op.Value, seq)
-								kv.kvdatabase[op.Key] = op.Value
-							}
-							previousValue = kv.kvdatabase[op.Key]
-						}
-						kv.nextSeq++
-						kv.mu.Unlock()
-						break
-					} else {
-						fmt.Printf("Paxos: %d Matching Seq: %d, GetValue: %s Op: %+v\n", kv.me, seq, kv.kvdatabase[op.Key], op)
-						reply.Value = kv.kvdatabase[op.Key]
-						reply.Err = OK
-						kv.nextSeq++
-						kv.mu.Unlock()
-						return nil
-					}
-				} else {
-					fmt.Println("type assertion failed")
-				}
-				kv.mu.Unlock()
-			} else {
-				fmt.Printf("Paxos: %d start Seq: %d\n", kv.me, seq)
-				kv.px.Start(seq, op)
-				time.Sleep(to)
-				if to < 100*time.Millisecond {
-					to *= 2
-				}
-			}
+func (kv *KVPaxos) waitForDecision(seq int, op Op) {
+	to := 10 * time.Millisecond
+	fmt.Printf("[Server %d] Re-starting Paxos at Seq %d for %+v\n", kv.me, seq, op)
+	go kv.px.Start(seq, op) //  Restart Paxos.
+	for {
+		decided, _ := kv.px.Status(seq)
+		if decided {
+			fmt.Printf("decided\n")
+			return
+		}
+		fmt.Printf("Still need waiting\n")
+		time.Sleep(to)
+		if to < 10*time.Second {
+			to *= 2
 		}
 	}
 }
 
-func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
-	reply.PreviousValue = kv.kvdatabase[args.Key]
-	to := 10 * time.Millisecond
+func (kv *KVPaxos) apply(op Op) string {
+	prev := kv.kvdatabase[op.Key]
+	if op.Optype == "Put" {
+		kv.kvdatabase[op.Key] = op.Value
+	} else if op.Optype == "PutHash" {
+		hashed := strconv.Itoa(int(hash(prev + op.Value)))
+		kv.kvdatabase[op.Key] = hashed
+	}
+	kv.done[op.ClientID] = Entry{op.RequestID, prev}
+	fmt.Printf("[Server %d] Applied Op: %+v, Pre: %s, New Value: %s\n", kv.me, op, prev, kv.kvdatabase[op.Key])
+	return prev
+}
 
+func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
+	// Your code here.
+	seq := kv.nextSeq
+	for {
+		if seq < kv.nextSeq {
+			seq = kv.nextSeq
+		}
+		op := Op{Optype: "Get", Key: args.Key, Value: kv.kvdatabase[args.Key], ClientID: args.ClientID, RequestID: args.RequestID}
+		fmt.Printf("Client: %d Get(%d): %s %s, Seq: %d\n", args.ClientID, kv.me, args.Key, kv.kvdatabase[args.Key], seq)
+		decided, _ := kv.px.Status(seq)
+		if !decided {
+			kv.waitForDecision(seq, op)
+		}
+		kv.mu.Lock()
+		_, v := kv.px.Status(seq)
+		op, ok := v.(Op)
+
+		fmt.Printf("Decided OP: % +v", op)
+		if ok {
+			isDup, lastReply := kv.isDuplicate(op.ClientID, op.RequestID)
+			if op.RequestID != args.RequestID || op.ClientID != args.ClientID {
+				fmt.Printf("Paxos: %d Not matching Seq: %d \n", kv.me, seq)
+				if !isDup {
+					if op.Optype != "Get" {
+						kv.apply(op)
+					} else {
+						kv.done[op.ClientID] = Entry{op.RequestID, op.Value}
+					}
+					fmt.Printf("[Server %d] Skipped Op at Seq %d: %+v\n", kv.me, seq, op)
+					//kv.px.Done(seq)
+				}
+				seq++
+			} else {
+				if isDup {
+					fmt.Printf("Client: %d, Requst: %d is duplicated, lastReply is: %s\n", args.ClientID, args.RequestID, kv.done[args.ClientID].LastReplyValue)
+					reply.Value = lastReply
+					reply.Err = OK
+					kv.mu.Unlock()
+					kv.nextSeq = seq + 1
+					return nil
+				}
+				reply.Value = op.Value
+				reply.Err = OK
+				fmt.Printf("[Server %d] GET Result: Key=%s, Value=%s, Seq=%d\n", kv.me, op.Key, reply.Value, seq)
+				kv.nextSeq = seq + 1
+				kv.done[op.ClientID] = Entry{op.RequestID, op.Value}
+				kv.mu.Unlock()
+				return nil
+			}
+		}
+		kv.mu.Unlock()
+	}
+}
+
+func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 	var opType string
 	if args.DoHash {
 		opType = "PutHash"
 	} else {
 		opType = "Put"
 	}
+	seq := kv.nextSeq
 	for {
 		op := Op{Optype: opType, Key: args.Key, Value: args.Value, ClientID: args.ClientID, RequestID: args.RequestID}
-		seq := kv.nextSeq
 		fmt.Printf("Client: %d Put(%d): %s : %s, Seq: %d\n", args.ClientID, kv.me, args.Key, args.Value, seq)
-		for {
-			if seq < kv.nextSeq {
-				break
-			}
-			decided, _ := kv.px.Status(seq)
-			if decided {
-				kv.mu.Lock()
-				_, dOp := kv.px.Status(seq)
-				op, ok := dOp.(Op)
-				fmt.Printf("Decided: %t Seq: %d, Op: %+v\n", decided, seq, op)
-				if ok {
-					if op.RequestID != args.RequestID || op.ClientID != args.ClientID {
-						fmt.Printf("Paxos: %d Not matching Seq: %d\n", kv.me, seq)
-						missingOptype := op.Optype
-						if missingOptype != "Get" {
-							fmt.Printf("Missing %+v\n", op)
-							if op.Optype == "PutHash" {
-								kv.kvdatabase[op.Key] = reply.PreviousValue + op.Value
-								fmt.Printf("Previous value: %s, new value: %s, Seq:%d \n", reply.PreviousValue, op.Value, seq)
-							} else {
-								fmt.Printf("Previous value: %s, new value: %s, Seq:%d \n", reply.PreviousValue, op.Value, seq)
-								kv.kvdatabase[op.Key] = op.Value
-							}
-							reply.PreviousValue = kv.kvdatabase[op.Key]
-						}
-						kv.nextSeq++
-						kv.mu.Unlock()
-						break
+		if seq < kv.nextSeq {
+			seq = kv.nextSeq
+		}
+
+		decided, _ := kv.px.Status(seq)
+		if !decided {
+			kv.waitForDecision(seq, op)
+		}
+		kv.mu.Lock()
+		_, dOp := kv.px.Status(seq)
+		op, ok := dOp.(Op)
+		if ok {
+			isDup, lastReply := kv.isDuplicate(op.ClientID, op.RequestID)
+			if op.RequestID != args.RequestID || op.ClientID != args.ClientID {
+				fmt.Printf("Paxos: %d Not matching Seq: %d\n", kv.me, seq)
+				if !isDup {
+					if op.Optype != "Get" {
+						kv.apply(op)
 					} else {
-						reply.Err = OK
-						if op.Optype == "PutHash" {
-							kv.kvdatabase[op.Key] = reply.PreviousValue + op.Value
-						} else {
-							kv.kvdatabase[op.Key] = op.Value
-						}
-						fmt.Printf("Paxos: %d Matching Seq: %d new Value: %s, pre Value: %s, Op: %+v\n", kv.me, seq, op.Value, reply.PreviousValue, op)
-						kv.nextSeq++
-						kv.mu.Unlock()
-						return nil
+						kv.done[op.ClientID] = Entry{op.RequestID, op.Value}
 					}
-				} else {
-					fmt.Println("type assertion failed")
+					fmt.Printf("[Server %d] Skipped Op at Seq %d: %+v\n", kv.me, seq, op)
 				}
-				kv.mu.Unlock()
+				seq++
 			} else {
-				fmt.Printf("Paxos: %d start Seq: %d\n", kv.me, seq)
-				kv.px.Start(seq, op)
-				time.Sleep(to)
-				if to < 100*time.Millisecond {
-					to *= 2
+				if isDup {
+					reply.PreviousValue = lastReply
+					reply.Err = OK
+					kv.nextSeq = seq + 1
+					kv.mu.Unlock()
+					return nil
 				}
+				reply.Err = OK
+				reply.PreviousValue = kv.apply(op)
+				fmt.Printf("[Server %d] PUT Applied at Seq %d: %+v\n", kv.me, seq, op)
+				//kv.px.Done(seq)
+				kv.nextSeq = seq + 1
+				kv.mu.Unlock()
+				return nil
 			}
 		}
+		kv.mu.Unlock()
 	}
 }
 

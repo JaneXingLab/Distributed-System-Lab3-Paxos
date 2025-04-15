@@ -57,21 +57,23 @@ func call(srv string, rpcname string,
 // keeps trying forever in the face of all other errors.
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	fmt.Printf("Get, client: %d, requestID: %d, key: %s\n", ck.clientID, ck.nextRequstID, key)
 	args := GetArgs{}
 	args.Key = key
 	args.ClientID = ck.clientID
 	args.RequestID = ck.nextRequstID
+	ck.nextRequstID++
 	var reply GetReply
-	for _, server := range ck.servers {
-		go call(server, "KVPaxos.Get", &args, &reply)
-		time.Sleep(50 * time.Millisecond)
-	}
+	fmt.Printf("Client: %d, Servers: %v\n", ck.clientID, ck.servers)
 	for {
+		for _, server := range ck.servers {
+			call(server, "KVPaxos.Get", &args, &reply)
+			fmt.Printf("Get(%s), client: %d, requestID: %d, key: %s\n", server, ck.clientID, args.RequestID, key)
+			time.Sleep(100 * time.Millisecond)
+		}
 		if reply.Err == "OK" {
 			return reply.Value
 		}
-		time.Sleep(10 * time.Millisecond) // short sleep before retryin
+		time.Sleep(100 * time.Millisecond) // short sleep before retry
 	}
 }
 
@@ -79,23 +81,26 @@ func (ck *Clerk) Get(key string) string {
 // keeps trying until it succeeds.
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
 	// You will have to modify this function.
-	fmt.Printf("Put, client: %d, requestID: %d, key: %s, value: %s\n", ck.clientID, ck.nextRequstID, key, value)
 	args := PutArgs{}
 	args.Key = key
 	args.Value = value
 	args.DoHash = dohash
 	args.ClientID = ck.clientID
 	args.RequestID = ck.nextRequstID
+	ck.nextRequstID++
 	var reply PutReply
-	for _, server := range ck.servers {
-		go call(server, "KVPaxos.Put", &args, &reply)
-		time.Sleep(50 * time.Millisecond)
-	}
+	fmt.Printf("Client: %d, Servers: %v\n", ck.clientID, ck.servers)
 	for {
+		for _, server := range ck.servers {
+			fmt.Printf("Put(%s), client: %d, requestID: %d, key: %s\n", server, ck.clientID, args.RequestID, key)
+			call(server, "KVPaxos.Put", &args, &reply)
+			time.Sleep(100 * time.Millisecond)
+		}
 		if reply.Err == "OK" {
 			return reply.PreviousValue
 		}
-		time.Sleep(10 * time.Millisecond)
+		fmt.Printf("Waiting for OK\n")
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
