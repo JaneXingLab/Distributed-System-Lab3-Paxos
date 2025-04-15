@@ -1,7 +1,6 @@
 package kvpaxos
 
 import (
-	"fmt"
 	"net/rpc"
 	"time"
 )
@@ -63,17 +62,15 @@ func (ck *Clerk) Get(key string) string {
 	args.RequestID = ck.nextRequstID
 	ck.nextRequstID++
 	var reply GetReply
-	fmt.Printf("Client: %d, Servers: %v\n", ck.clientID, ck.servers)
 	for {
 		for _, server := range ck.servers {
 			call(server, "KVPaxos.Get", &args, &reply)
-			fmt.Printf("Get(%s), client: %d, requestID: %d, key: %s\n", server, ck.clientID, args.RequestID, key)
 			time.Sleep(100 * time.Millisecond)
 		}
 		if reply.Err == "OK" {
 			return reply.Value
 		}
-		time.Sleep(100 * time.Millisecond) // short sleep before retry
+		time.Sleep(10 * time.Millisecond) // short sleep before retry
 	}
 }
 
@@ -89,17 +86,14 @@ func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
 	args.RequestID = ck.nextRequstID
 	ck.nextRequstID++
 	var reply PutReply
-	fmt.Printf("Client: %d, Servers: %v\n", ck.clientID, ck.servers)
 	for {
 		for _, server := range ck.servers {
-			fmt.Printf("Put(%s), client: %d, requestID: %d, key: %s\n", server, ck.clientID, args.RequestID, key)
 			call(server, "KVPaxos.Put", &args, &reply)
 			time.Sleep(100 * time.Millisecond)
 		}
 		if reply.Err == "OK" {
 			return reply.PreviousValue
 		}
-		fmt.Printf("Waiting for OK\n")
 		time.Sleep(100 * time.Millisecond)
 	}
 }

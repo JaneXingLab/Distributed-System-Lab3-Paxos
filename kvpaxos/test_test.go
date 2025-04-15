@@ -10,7 +10,6 @@ import "math/rand"
 
 func check(t *testing.T, ck *Clerk, key string, value string) {
 	v := ck.Get(key)
-	fmt.Printf("ck: %v, v: %s\n", ck, v)
 	if v != value {
 		t.Fatalf("Get(%v) -> %v, expected %v", key, v, value)
 	}
@@ -105,7 +104,6 @@ func TestBasic(t *testing.T) {
 		for i := 0; i < nservers; i++ {
 			va[i] = cka[i].Get("b")
 			if va[i] != va[0] {
-				fmt.Printf("mismatch; 0 got %v, %v got %v\n", va[0], i, va[i])
 				t.Fatalf("mismatch")
 			}
 		}
@@ -299,7 +297,6 @@ func TestPartition(t *testing.T) {
 
 	part(t, tag, nservers, []int{0, 2, 3, 4}, []int{1}, []int{})
 	for iters := 0; iters < 30; iters++ {
-		fmt.Printf("Done0: %t \n", done0)
 		if done0 {
 			break
 		}
@@ -385,30 +382,24 @@ func TestUnreliable(t *testing.T) {
 				pv := myck.Get(key)
 				ov := myck.PutHash(key, "0")
 				if ov != pv {
-					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value; expected %s but got %s", pv, ov)
 				}
-				fmt.Printf("put hash: key %s, value 1", key)
 				ov = myck.PutHash(key, "1")
 				pv = NextValue(pv, "0")
 				if ov != pv {
-					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value; expected %s but got %s", pv, ov)
 				}
 				ov = myck.PutHash(key, "2")
 				pv = NextValue(pv, "1")
 				if ov != pv {
-					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value; expected %s", pv)
 				}
 				nv := NextValue(pv, "2")
 				time.Sleep(100 * time.Millisecond)
 				if myck.Get(key) != nv {
-					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value")
 				}
 				if myck.Get(key) != nv {
-					fmt.Printf("myck: %d, pv: %s , ov: %s\n", myck.clientID, pv, ov)
 					t.Fatalf("wrong value")
 				}
 				ok = true
