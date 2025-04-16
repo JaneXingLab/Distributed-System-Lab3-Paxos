@@ -1,7 +1,9 @@
 package kvpaxos
 
-import "net"
-import "fmt"
+import (
+	"net"
+	"time"
+)
 import "net/rpc"
 import "log"
 import "lab3/paxos"
@@ -10,6 +12,7 @@ import "os"
 import "syscall"
 import "encoding/gob"
 import "math/rand"
+import "strconv"
 
 const Debug = 0
 
@@ -20,15 +23,20 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+type Entry struct {
+	LastRequstID   int
+	LastReplyValue string
+}
+
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Optype   string
-	Key      string
-	Value    string
-	ClientID int64
-	RequestID      int
+	Optype    string
+	Key       string
+	Value     string
+	ClientID  int
+	RequestID int
 }
 
 type KVPaxos struct {
@@ -40,6 +48,7 @@ type KVPaxos struct {
 	px         *paxos.Paxos
 	kvdatabase map[string]string
 	nextSeq    int
+	done       map[int]Entry
 
 	// Your definitions here.
 }
@@ -50,60 +59,149 @@ func makeKVPaxos(me int) *KVPaxos {
 	kv.kvdatabase = make(map[string]string)
 	// Your initialization code here.
 	kv.nextSeq = 0
+	kv.done = make(map[int]Entry)
 	return kv
+}
+
+func (kv *KVPaxos) isDuplicate(clientID int, requestID int) (bool, string) {
+	lastRequst, ok := kv.done[clientID]
+	return ok && lastRequst.LastRequstID >= requestID, kv.done[clientID].LastReplyValue
+}
+
+func (kv *KVPaxos) waitForDecision(seq int, op Op) {
+	to := 10 * time.Millisecond
+	go kv.px.Start(seq, op) //  Restart Paxos.
+	for {
+		decided, _ := kv.px.Status(seq)
+		if decided {
+			return
+		}
+		time.Sleep(to)
+		if to < 10*time.Second {
+			to *= 2
+		}
+	}
+}
+
+func (kv *KVPaxos) apply(op Op) string {
+	prev := kv.kvdatabase[op.Key]
+	if op.Optype == "Put" {
+		kv.kvdatabase[op.Key] = op.Value
+		//fmt.Printf("KVPaxos:%d applied Put Key: %s, Value: %s\n", kv.me, op.Key, op.Value)
+	} else if op.Optype == "PutHash" {
+		hashed := strconv.Itoa(int(hash(prev + op.Value)))
+		kv.kvdatabase[op.Key] = hashed
+	}
+	kv.done[op.ClientID] = Entry{op.RequestID, prev}
+	return prev
 }
 
 func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 	// Your code here.
-	kv.mu.Lock()
 	seq := kv.nextSeq
-	kv.nextSeq++
-	Op := Op{Optype: "Get", Key: args.Key, Value: kv.kvdatabase[args.Key], ClientID: args.ClientID, Seq: seq}
-	kv.mu.Unlock()
-	for{
-        kv.px.Start(seq, Op)
-        if Op. || Op.ClientID != args.ClientID {
-            kv.mu.Lock()
-            kv.nextSeq++
-            kv.mu.Unlock()
-            seq++
-            missingOptype := Op.Optype
-            if missingOptype != "Get" {
-              kv.kvdatabase[Op.Key] = Op.Value
-            }
-            continue
-        } else {
+	for {
+		if seq < kv.nextSeq {
+			seq = kv.nextSeq
+		}
+		op := Op{Optype: "Get", Key: args.Key, Value: kv.kvdatabase[args.Key], ClientID: args.ClientID, RequestID: args.RequestID}
+		decided, _ := kv.px.Status(seq)
+		if !decided {
+			kv.waitForDecision(seq, op)
+		}
+		kv.mu.Lock()
+		_, v := kv.px.Status(seq)
+		//fmt.Printf("decided Seq: %d v: %+v, op: %+v\n", seq, v, op)
+		op, ok := v.(Op)
 
-        }
-    }
-	reply.Value = Op.Value
-	kv.mu.Lock()
-	kv.kvdatabase[args.Key] = Op.Value
-	kv.mu.Unlock()
-	reply.Value = Op.Value
-	return nil
+		if ok {
+			isDup, lastReply := kv.isDuplicate(op.ClientID, op.RequestID)
+			if op.RequestID != args.RequestID || op.ClientID != args.ClientID {
+				if !isDup {
+					if op.Optype != "Get" {
+						kv.apply(op)
+					} else {
+						kv.done[op.ClientID] = Entry{op.RequestID, op.Value}
+					}
+					kv.px.Done(seq)
+				}
+				//fmt.Printf("KV: %d has done Seq: %d, Op: %+v\n", kv.me, seq, op)
+				seq++
+			} else {
+				if isDup {
+					reply.Value = lastReply
+					reply.Err = OK
+					kv.mu.Unlock()
+					//fmt.Printf("KV: %d has done Seq: %d, Op: %+v\n", kv.me, seq, op)
+					kv.nextSeq = seq + 1
+					//fmt.Printf("KV: %d, database: %+v\n", kv.me, kv.kvdatabase)
+					return nil
+				}
+				reply.Value = op.Value
+				reply.Err = OK
+				//fmt.Printf("KV: %d has done Seq: %d, Op: %+v\n", kv.me, seq, op)
+				kv.nextSeq = seq + 1
+				kv.done[args.ClientID] = Entry{args.RequestID, kv.kvdatabase[args.Key]}
+				//fmt.Printf("KV: %d, database: %+v\n", kv.me, kv.kvdatabase)
+				kv.mu.Unlock()
+				return nil
+			}
+		}
+		kv.mu.Unlock()
+	}
 }
 
 func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
-	// Your code here.
-	kv.mu.Lock()
-	Seq := kv.nextSeq
-	kv.nextSeq++
-	Op := Op{Optype: "Put", Key: args.Key, Value: args.Value, ClientID: args.ClientID}
-	kv.mu.Unlock()
-	for {
-		kv.px.Start(Seq, Op)
-		if Op.ClientID != args.ClientID {
-			kv.mu.Lock()
-			px.nextSeq++
-			kv.mu.Unlock()
-			Seq++
-			continue
-		} else {
-			break
-		}
+	var opType string
+	if args.DoHash {
+		opType = "PutHash"
+	} else {
+		opType = "Put"
 	}
-	return nil
+	seq := kv.nextSeq
+	for {
+		op := Op{Optype: opType, Key: args.Key, Value: args.Value, ClientID: args.ClientID, RequestID: args.RequestID}
+		if seq < kv.nextSeq {
+			seq = kv.nextSeq
+		}
+
+		decided, _ := kv.px.Status(seq)
+		if !decided {
+			kv.waitForDecision(seq, op)
+		}
+		kv.mu.Lock()
+		_, v := kv.px.Status(seq)
+		//fmt.Printf("decided Seq: %d v: %+v, op: %+v\n", seq, v, op)
+
+		op, ok := v.(Op)
+		if ok {
+			isDup, lastReply := kv.isDuplicate(op.ClientID, op.RequestID)
+			if op.RequestID != args.RequestID || op.ClientID != args.ClientID {
+				if !isDup {
+					if op.Optype != "Get" {
+						kv.apply(op)
+					} else {
+						kv.done[op.ClientID] = Entry{op.RequestID, op.Value}
+					}
+				}
+				seq++
+			} else {
+				if isDup {
+					reply.PreviousValue = lastReply
+					reply.Err = OK
+					kv.nextSeq = seq + 1
+					kv.mu.Unlock()
+					return nil
+				}
+				reply.Err = OK
+				reply.PreviousValue = kv.apply(op)
+				kv.px.Done(seq)
+				kv.nextSeq = seq + 1
+				kv.mu.Unlock()
+				return nil
+			}
+		}
+		kv.mu.Unlock()
+	}
 }
 
 // tell the server to shut itself down.
@@ -154,7 +252,6 @@ func StartServer(servers []string, me int) *KVPaxos {
 					f, _ := c1.File()
 					err := syscall.Shutdown(int(f.Fd()), syscall.SHUT_WR)
 					if err != nil {
-						fmt.Printf("shutdown: %v\n", err)
 					}
 					go rpcs.ServeConn(conn)
 				} else {
@@ -164,7 +261,6 @@ func StartServer(servers []string, me int) *KVPaxos {
 				conn.Close()
 			}
 			if err != nil && kv.dead == false {
-				fmt.Printf("KVPaxos(%v) accept: %v\n", me, err.Error())
 				kv.kill()
 			}
 		}

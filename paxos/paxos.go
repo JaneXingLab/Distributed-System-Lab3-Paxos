@@ -278,8 +278,9 @@ func (px *Paxos) startInstance(seq int, v interface{}) {
 		}
 		if peer == px.peers[px.me] {
 			// self does not need to call Decide, we already know the result
-			// fmt.Printf("Paxos %d: Already decided for seq %d, skipping self\n", px.me, seq)
+			//fmt.Printf("Paxos %d: Already decided for seq %d, skipping self\n", px.me, seq)
 			instance.decided = true
+			//fmt.Printf("Paxos %d: Done for seq %d Op: %+v \n", index, seq, instance.v_a)
 			continue
 		}
 		// fmt.Printf("%d Sending Decide to %s for seq %d with V_a=%v\n", px.me, peer, seq, instance.v_a)
@@ -291,6 +292,7 @@ func (px *Paxos) startInstance(seq int, v interface{}) {
 		px.mu.Unlock()
 		decideReply := &DecideReply{}
 		if call(peer, "Paxos.Decide", decideArgs, decideReply) {
+			//fmt.Printf("Paxos %d: Done for seq %d Op: %+v \n", index, seq, instance.v_a)
 			// fmt.Printf("%d Received Decide reply from %s for seq %d with Ok=%v\n", px.me, peer, seq, decideReply.Ok)
 			px.done[index] = decideReply.Done // update the done array
 			// update the done array

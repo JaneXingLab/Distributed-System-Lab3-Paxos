@@ -2,19 +2,26 @@ package kvpaxos
 
 import (
 	"net/rpc"
+	"sync"
 	"time"
 )
+import "sync/atomic"
+
+var globalClientID int64 = 0
 
 type Clerk struct {
-	servers  []string
-	clientID int64
+	servers      []string
+	clientID     int
+	nextRequstID int
+	mu           sync.Mutex
 	// You will have to modify this struct.
 }
 
 func MakeClerk(servers []string) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.clientID = time.Now().UnixNano()
+	ck.clientID = int(atomic.AddInt64(&globalClientID, 1))
+	ck.nextRequstID = 1
 	// You'll have to add code here.
 	return ck
 }
@@ -51,14 +58,53 @@ func call(srv string, rpcname string,
 // keeps trying forever in the face of all other errors.
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	return ""
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	//fmt.Printf("Client: %d Get Key: %s", ck.clientID, key)
+	args := GetArgs{}
+	args.Key = key
+	args.ClientID = ck.clientID
+	args.RequestID = ck.nextRequstID
+	ck.nextRequstID++
+	var reply GetReply
+	for {
+		for _, server := range ck.servers {
+			call(server, "KVPaxos.Get", &args, &reply)
+			time.Sleep(100 * time.Millisecond)
+		}
+		if reply.Err == "OK" {
+			//fmt.Printf("Client: %d, Get Key: %s, Value: %s, RequestID: %d\n", ck.clientID, key, reply.Value, ck.nextRequstID)
+			return reply.Value
+		}
+		time.Sleep(10 * time.Millisecond) // short sleep before retry
+	}
 }
 
 // set the value for a key.
 // keeps trying until it succeeds.
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
 	// You will have to modify this function.
-	return ""
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	args := PutArgs{}
+	args.Key = key
+	args.Value = value
+	args.DoHash = dohash
+	args.ClientID = ck.clientID
+	args.RequestID = ck.nextRequstID
+	//fmt.Printf("Client: %d, Put Key: %s, Value: %s, RequestID: %d\n", ck.clientID, key, value, ck.nextRequstID)
+	ck.nextRequstID++
+	var reply PutReply
+	for {
+		for _, server := range ck.servers {
+			call(server, "KVPaxos.Put", &args, &reply)
+			time.Sleep(100 * time.Millisecond)
+		}
+		if reply.Err == "OK" {
+			return reply.PreviousValue
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

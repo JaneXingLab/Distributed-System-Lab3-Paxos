@@ -14,7 +14,7 @@ type PutArgs struct {
 	Value     string
 	DoHash    bool // For PutHash
 	RequestID int
-	ClientID  int64
+	ClientID  int
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
@@ -28,7 +28,7 @@ type PutReply struct {
 type GetArgs struct {
 	Key       string
 	RequestID int
-	ClientID  int64
+	ClientID  int
 	// You'll have to add definitions here.
 }
 
