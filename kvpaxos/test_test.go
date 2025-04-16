@@ -505,10 +505,12 @@ func TestHole(t *testing.T) {
 					ci := (rand.Int() % 2)
 					if (rand.Int() % 1000) < 500 {
 						nv := strconv.Itoa(rand.Int())
+						//fmt.Printf("Client: %d, Put Key: %s, Value: %s\n", cka[ci].clientID, key, nv)
 						cka[ci].Put(key, nv)
 						last = nv
 					} else {
 						v := cka[ci].Get(key)
+						//fmt.Printf("Client: %d, Get Key: %s, Value: %s, last: %s\n", cka[ci].clientID, key, v, last)
 						if v != last {
 							t.Fatalf("%v: wrong value, key %v, wanted %v, got %v",
 								cli, key, last, v)

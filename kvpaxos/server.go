@@ -87,6 +87,7 @@ func (kv *KVPaxos) apply(op Op) string {
 	prev := kv.kvdatabase[op.Key]
 	if op.Optype == "Put" {
 		kv.kvdatabase[op.Key] = op.Value
+		//fmt.Printf("KVPaxos:%d applied Put Key: %s, Value: %s\n", kv.me, op.Key, op.Value)
 	} else if op.Optype == "PutHash" {
 		hashed := strconv.Itoa(int(hash(prev + op.Value)))
 		kv.kvdatabase[op.Key] = hashed
@@ -109,6 +110,7 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 		}
 		kv.mu.Lock()
 		_, v := kv.px.Status(seq)
+		//fmt.Printf("decided Seq: %d v: %+v, op: %+v\n", seq, v, op)
 		op, ok := v.(Op)
 
 		if ok {
@@ -122,19 +124,24 @@ func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 					}
 					kv.px.Done(seq)
 				}
+				//fmt.Printf("KV: %d has done Seq: %d, Op: %+v\n", kv.me, seq, op)
 				seq++
 			} else {
 				if isDup {
 					reply.Value = lastReply
 					reply.Err = OK
 					kv.mu.Unlock()
+					//fmt.Printf("KV: %d has done Seq: %d, Op: %+v\n", kv.me, seq, op)
 					kv.nextSeq = seq + 1
+					//fmt.Printf("KV: %d, database: %+v\n", kv.me, kv.kvdatabase)
 					return nil
 				}
 				reply.Value = op.Value
 				reply.Err = OK
+				//fmt.Printf("KV: %d has done Seq: %d, Op: %+v\n", kv.me, seq, op)
 				kv.nextSeq = seq + 1
-				kv.done[op.ClientID] = Entry{op.RequestID, op.Value}
+				kv.done[args.ClientID] = Entry{args.RequestID, kv.kvdatabase[args.Key]}
+				//fmt.Printf("KV: %d, database: %+v\n", kv.me, kv.kvdatabase)
 				kv.mu.Unlock()
 				return nil
 			}
@@ -162,8 +169,10 @@ func (kv *KVPaxos) Put(args *PutArgs, reply *PutReply) error {
 			kv.waitForDecision(seq, op)
 		}
 		kv.mu.Lock()
-		_, dOp := kv.px.Status(seq)
-		op, ok := dOp.(Op)
+		_, v := kv.px.Status(seq)
+		//fmt.Printf("decided Seq: %d v: %+v, op: %+v\n", seq, v, op)
+
+		op, ok := v.(Op)
 		if ok {
 			isDup, lastReply := kv.isDuplicate(op.ClientID, op.RequestID)
 			if op.RequestID != args.RequestID || op.ClientID != args.ClientID {
